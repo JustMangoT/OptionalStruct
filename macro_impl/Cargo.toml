@@ -6,10 +6,10 @@ description = "Helper crate defining the proc_macro for the optional_struct crat
 license = "Apache-2.0"
 
 [dependencies]
-syn = { version = "1.0.107", features = ["parsing", "proc-macro"] }
+syn = { version = "1.0", features = ["parsing", "proc-macro"] }
 quote = "1.0"
-proc-macro2 = "1.0.49"
-optional_struct_internal = { version = "0.3.0", path = "../internal" }
+proc-macro2 = "1.0"
+optional_struct_internal = { version = "0.3.1", path = "../internal" }
 
 [lib]
 proc-macro = true

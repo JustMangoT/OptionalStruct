@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse_macro_input, spanned::Spanned, AttributeArgs, Data, DeriveInput, Field, Fields, Ident,
-    Meta, NestedMeta, Path, Type, Visibility,
+    Meta, NestedMeta, Path, Type, Visibility, Lit,
 };
 
 // TODO this breaks for e.g. yolo::my::Option
@@ -170,6 +170,8 @@ fn remove_optional_struct_attributes(original_struct: &mut DeriveInput) {
 struct FieldAttributeData {
     wrap: bool,
     new_type: Option<proc_macro2::TokenTree>,
+    rewrap_serde_as: Option<usize>,
+    rewrap_serde_skip_serializing_if: Option<usize>,
 }
 
 impl FieldAttributeData {
@@ -181,8 +183,52 @@ impl FieldAttributeData {
             quote! {#t}
         };
 
+        if let Some(i) = self.rewrap_serde_as {
+            let a = &mut f.attrs[i];
+
+            if let Ok(Meta::List(ml)) = a.parse_meta() {
+                for n in ml.nested {
+                    let value = if let NestedMeta::Meta(Meta::NameValue(m)) = n {
+                        m
+                    } else {
+                        continue;
+                    };
+
+                    let value = &value;
+
+                    if value.path.is_ident("as") {
+                        let original_lit = if let Lit::Str(s) = &value.lit {
+                            s
+                        } else {
+                            continue;
+                        };
+
+                        a.tokens = a.tokens.to_string().replace(&value.to_token_stream().to_string(), &format!("as = \"Option<{}>\"", original_lit.value())).parse().unwrap();
+                    }
+                }
+            };   
+        }
+
+        if let Some(i) = self.rewrap_serde_skip_serializing_if {
+            let a = &mut f.attrs[i];
+
+            if let Ok(Meta::List(ml)) = a.parse_meta() {
+                for n in ml.nested {
+                    let value = if let NestedMeta::Meta(Meta::NameValue(m)) = n {
+                        m
+                    } else {
+                        continue;
+                    };
+
+                    if value.path.is_ident("skip_serializing_if") {
+                        a.tokens = a.tokens.to_string().replace(&value.to_token_stream().to_string(), "").parse().unwrap();
+                    }
+                }
+            };   
+        }
+
         if self.wrap {
-            new_type = quote! {Option<#new_type>};
+            new_type = quote! {Option<#new_type>}; 
         };
         f.ty = Type::Verbatim(new_type);
     }
@@ -192,41 +238,53 @@ fn extract_relevant_attributes(field: &mut Field, default_wrapping: bool) -> Fie
     const RENAME_ATTRIBUTE: &str = "optional_rename";
     const SKIP_WRAP_ATTRIBUTE: &str = "optional_skip_wrap";
     const WRAP_ATTRIBUTE: &str = "optional_wrap";
+    
+    const SERDE_ATTRIBUTE: &str = "serde";
+    const SERDE_AS_ATTRIBUTE: &str = "serde_as";
 
     let mut field_attribute_data = FieldAttributeData {
         wrap: default_wrapping,
         new_type: None,
+        rewrap_serde_as: None,
+        rewrap_serde_skip_serializing_if: None,
     };
-    let indexes_to_remove = field
+    let mut indexes_to_remove = Vec::new();
+
+    field
         .attrs
-        .iter()
+        .iter_mut()
         .enumerate()
-        .filter_map(|(i, a)| {
+        .for_each(|(i, a)| {
             if a.path.is_ident(RENAME_ATTRIBUTE) {
                 let args = a
                     .parse_args()
                     .expect("'{RENAME_ATTRIBUTE}' attribute expects one and only one argument (the new type to use)");
                 field_attribute_data.new_type = Some(args);
-                Some(i)
+                indexes_to_remove.push(i);
             }
             else if a.path.is_ident(SKIP_WRAP_ATTRIBUTE) {
                 field_attribute_data.wrap = false;
-                Some(i)
+                indexes_to_remove.push(i);
             }
             else if a.path.is_ident(WRAP_ATTRIBUTE) {
                 field_attribute_data.wrap = true;
-                Some(i)
+                indexes_to_remove.push(i);
             }
-            else {
-                None
+            
+            if a.path.is_ident(SERDE_AS_ATTRIBUTE) {
+                field_attribute_data.rewrap_serde_as = Some(i);
             }
-        })
-        .collect::<Vec<_>>();
+
+            if a.path.is_ident(SERDE_ATTRIBUTE) {
+                field_attribute_data.rewrap_serde_skip_serializing_if = Some(i);
+            }
+        });
 
     // Don't forget to reverse so the indices are removed without being shifted!
     for i in indexes_to_remove.into_iter().rev() {
         field.attrs.swap_remove(i);
     }
+
     field_attribute_data
 }
 
